@@ -1,0 +1,46 @@
+.:53 {
+    # Load zone files
+    file /etc/coredns/zones/ddc.local.zone ddc.local
+    
+    # Geo-routing based on client IP
+    # This is a simplified version for local testing
+    template IN A ddc.local {
+        match "^(.*)\.ddc\.local\.$"
+        answer "{{ .Name }} 60 IN A 10.1.0.100"
+        fallthrough
+    }
+    
+    # EU zone routing (simulate European IPs)
+    template IN A eu.ddc.local {
+        match "^eu\.ddc\.local\.$"
+        answer "{{ .Name }} 60 IN A 10.1.0.100"
+    }
+    
+    # US zone routing (simulate US IPs)
+    template IN A us.ddc.local {
+        match "^us\.ddc\.local\.$"
+        answer "{{ .Name }} 60 IN A 10.2.0.100"
+    }
+    
+    # Health checking and failover
+    health {
+        lameduck 5s
+    }
+    
+    # Logging
+    log
+    
+    # Error handling
+    errors
+    
+    # Cache responses
+    cache 30
+    
+    # Load balancing
+    loadbalance round_robin
+    
+    # Forward unmatched queries to upstream DNS
+    forward . 8.8.8.8 8.8.4.4 {
+        except ddc.local
+    }
+} 

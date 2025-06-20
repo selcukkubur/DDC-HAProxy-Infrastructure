@@ -1,0 +1,37 @@
+# DDC HAProxy Infrastructure - Simplified Docker Image
+FROM alpine:3.18
+
+# Install HAProxy and other packages as root
+RUN apk update && \
+    apk add --no-cache \
+    haproxy \
+    keepalived \
+    curl \
+    openssl \
+    bash \
+    && rm -rf /var/cache/apk/*
+
+# Create directories
+RUN mkdir -p /etc/haproxy/errors /etc/keepalived /etc/ssl/certs /etc/ssl/private
+
+# Copy files
+COPY errors/* /etc/haproxy/errors/
+COPY start-haproxy.sh /start-haproxy.sh
+RUN chmod +x /start-haproxy.sh
+
+# Generate certificate
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/ssl/private/haproxy.key \
+    -out /etc/ssl/certs/haproxy.crt \
+    -subj "/C=US/ST=Test/L=Test/O=DDC/CN=*.ddc.local" && \
+    cat /etc/ssl/certs/haproxy.crt /etc/ssl/private/haproxy.key > /etc/ssl/certs/haproxy.pem
+
+# Expose ports
+EXPOSE 80 443 8080 8404
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8404/health || exit 1
+
+# Start script
+CMD ["/start-haproxy.sh"] 

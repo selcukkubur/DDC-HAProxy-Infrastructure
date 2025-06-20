@@ -1,0 +1,20 @@
+HTTP/1.1 408 Request Timeout
+Content-Type: text/html
+Cache-Control: no-cache
+Connection: close
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>408 Request Timeout</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        h1 { color: #f39c12; }
+    </style>
+</head>
+<body>
+    <h1>408 Request Timeout</h1>
+    <p>The server timed out waiting for the request.</p>
+    <p>DDC HAProxy Infrastructure</p>
+</body>
+</html> 

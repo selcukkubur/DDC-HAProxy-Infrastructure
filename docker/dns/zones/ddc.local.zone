@@ -1,0 +1,75 @@
+$TTL 300
+@       IN      SOA     ns1.ddc.local. admin.ddc.local. (
+                        2024061901      ; Serial
+                        3600            ; Refresh
+                        1800            ; Retry
+                        604800          ; Expire
+                        300             ; Minimum TTL
+                        )
+
+; Name servers
+@               IN      NS      ns1.ddc.local.
+@               IN      NS      ns2.ddc.local.
+
+; Name server A records
+ns1             IN      A       10.0.0.53
+ns2             IN      A       10.0.0.54
+
+; Main domain - geo-routed (default to EU for local testing)
+@               IN      A       10.1.0.100
+ddc.local.      IN      A       10.1.0.100
+
+; Zone-specific records
+eu              IN      A       10.1.0.100
+us              IN      A       10.2.0.100
+
+; API endpoints
+api             IN      A       10.1.0.100
+eu-api          IN      A       10.1.0.100
+us-api          IN      A       10.2.0.100
+
+; ConfigWatcher APIs
+configwatcher   IN      A       10.1.0.30
+eu-configwatcher IN     A       10.1.0.30
+us-configwatcher IN     A       10.2.0.30
+
+; HAProxy stats
+stats           IN      A       10.1.0.10
+eu-stats        IN      A       10.1.0.10
+us-stats        IN      A       10.2.0.10
+
+; Load balancer VIPs
+vip             IN      A       10.1.0.100
+eu-vip          IN      A       10.1.0.100
+us-vip          IN      A       10.2.0.100
+
+; Backend nodes
+eu-node1        IN      A       10.1.0.20
+eu-node2        IN      A       10.1.0.21
+eu-node3        IN      A       10.1.0.22
+us-node1        IN      A       10.2.0.20
+us-node2        IN      A       10.2.0.21
+us-node3        IN      A       10.2.0.22
+
+; Monitoring
+monitoring      IN      A       10.0.0.47
+prometheus      IN      A       10.0.0.47
+grafana         IN      A       10.0.0.48
+
+; CNAME records for convenience
+www             IN      CNAME   @
+api-eu          IN      CNAME   eu-api
+api-us          IN      CNAME   us-api
+
+; SRV records for service discovery
+_http._tcp      IN      SRV     10 5 80  eu.ddc.local.
+_http._tcp      IN      SRV     20 5 80  us.ddc.local.
+_https._tcp     IN      SRV     10 5 443 eu.ddc.local.
+_https._tcp     IN      SRV     20 5 443 us.ddc.local.
+_grpc._tcp      IN      SRV     10 5 8443 eu.ddc.local.
+_grpc._tcp      IN      SRV     20 5 8443 us.ddc.local.
+
+; TXT records for configuration
+@               IN      TXT     "v=ddc1 zones=eu,us failover=enabled"
+eu              IN      TXT     "v=ddc1 zone=eu priority=110 vip=10.1.0.100"
+us              IN      TXT     "v=ddc1 zone=us priority=100 vip=10.2.0.100" 

@@ -1,0 +1,719 @@
+version: '3.8'
+
+# DDC HAProxy Infrastructure - Complete Docker Compose Implementation
+# Features: HAProxy clusters, Keepalived VIP management, DNS geo-routing, SSL certificates
+# This setup provides a complete multi-zone environment with all assignment requirements
+
+networks:
+  eu_zone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.1.0.0/24
+          gateway: 10.1.0.1
+  us_zone:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.2.0.0/24
+          gateway: 10.2.0.1
+  management:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.0.0/24
+          gateway: 10.0.0.1
+
+volumes:
+  eu_haproxy_socket:
+    driver: local
+  us_haproxy_socket:
+    driver: local
+  us_haproxy_config:
+    driver: local
+  eu_haproxy_config:
+    driver: local
+  monitoring_data:
+    driver: local
+  ssl_certificates:
+    driver: local
+  dns_data:
+    driver: local
+
+services:
+  # =================================================================
+  # EU ZONE SERVICES - HAProxy Cluster with Keepalived VIP
+  # =================================================================
+  
+  # EU HAProxy Master with Keepalived
+  eu-haproxy-1:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: eu-haproxy-1
+    hostname: eu-haproxy-1
+    privileged: true  # Required for Keepalived VIP management
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.10
+      management:
+    ports:
+      - "80:80"           # HTTP
+      - "443:443"         # HTTPS
+      - "8443:8443"       # gRPC
+      - "8404:8404"       # Stats
+    volumes:
+      - ../configs/haproxy/haproxy-eu.cfg:/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy/maintenance.html:/etc/haproxy/maintenance.html:ro
+      - ssl_certificates:/etc/ssl/haproxy:ro
+      - eu_haproxy_socket:/var/run/haproxy
+    environment:
+      - ZONE=eu
+      - ROLE=master
+      - VIP_ADDRESS=10.1.0.100
+      - KEEPALIVED_PRIORITY=110
+      - PEER_ADDRESS=10.1.0.11
+      - VRRP_PASSWORD=eu_vrrp_secure_pass
+    depends_on:
+      - eu-backend-1
+      - eu-backend-2
+      - ssl-cert-manager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8404/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+
+  # EU HAProxy Backup with Keepalived
+  eu-haproxy-2:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: eu-haproxy-2
+    hostname: eu-haproxy-2
+    privileged: true  # Required for Keepalived VIP management
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.11
+      management:
+    ports:
+      - "8085:80"         # HTTP (different port for local testing)
+      - "8444:443"        # HTTPS
+      - "8445:8443"       # gRPC
+      - "8405:8404"       # Stats
+    volumes:
+      - ../configs/haproxy/haproxy-eu.cfg:/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy/maintenance.html:/etc/haproxy/maintenance.html:ro
+      - ssl_certificates:/etc/ssl/haproxy:ro
+      - eu_haproxy_socket:/var/run/haproxy
+    environment:
+      - ZONE=eu
+      - ROLE=backup
+      - VIP_ADDRESS=10.1.0.100
+      - KEEPALIVED_PRIORITY=105
+      - PEER_ADDRESS=10.1.0.10
+      - VRRP_PASSWORD=eu_vrrp_secure_pass
+    depends_on:
+      - eu-backend-1
+      - eu-backend-2
+      - ssl-cert-manager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8404/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+
+  # EU Backend Nodes (DDC Nodes)
+  eu-backend-1:
+    image: nginx:alpine
+    container_name: eu-backend-1
+    hostname: eu-backend-1
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.20
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=eu-node-1
+      - ZONE=eu
+      - SERVER_NAME=eu-backend-1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  eu-backend-2:
+    image: nginx:alpine
+    container_name: eu-backend-2
+    hostname: eu-backend-2
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.21
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=eu-node-2
+      - ZONE=eu
+      - SERVER_NAME=eu-backend-2
+    restart: unless-stopped
+
+  eu-backend-3:
+    image: nginx:alpine
+    container_name: eu-backend-3
+    hostname: eu-backend-3
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.22
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=eu-node-3
+      - ZONE=eu
+      - SERVER_NAME=eu-backend-3
+    restart: unless-stopped
+
+  # EU ConfigWatcher API - Primary
+  eu-configwatcher:
+    image: python:3.11-alpine
+    container_name: eu-configwatcher
+    hostname: eu-configwatcher
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.30
+      management:
+    ports:
+      - "9080:8080"
+    volumes:
+      - ./configwatcher-api:/app
+      - ../configs/haproxy/haproxy-eu.cfg:/etc/haproxy/haproxy.cfg
+      - eu_haproxy_socket:/var/run/haproxy
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: sh -c "apk add --no-cache socat curl && mkdir -p /app/logs && pip install 'flask-restx>=1.3.0' flask redis requests pyyaml flask-cors prometheus-client pyjwt web3 docker && python src/app.py"
+    environment:
+      - ZONE=eu
+      - HAPROXY_CONFIG_PATH=/etc/haproxy/haproxy.cfg
+      - HAPROXY_SOCKET=/var/run/haproxy/haproxy.sock
+      - BLOCKCHAIN_RPC=http://blockchain:8545
+      - JWT_SECRET=your_jwt_secret_here
+      - LOG_LEVEL=info
+    depends_on:
+      - blockchain
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # EU ConfigWatcher API - Backup
+  eu-configwatcher-2:
+    image: python:3.11-alpine
+    container_name: eu-configwatcher-2
+    hostname: eu-configwatcher-2
+    networks:
+      eu_zone:
+        ipv4_address: 10.1.0.31
+      management:
+    ports:
+      - "9082:8080"
+    volumes:
+      - ./configwatcher-api:/app
+      - ../configs/haproxy/haproxy-eu.cfg:/etc/haproxy/haproxy.cfg
+      - eu_haproxy_socket:/var/run/haproxy
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: sh -c "apk add --no-cache socat curl && mkdir -p /app/logs && pip install 'flask-restx>=1.3.0' flask redis requests pyyaml flask-cors prometheus-client pyjwt web3 docker && python src/app.py"
+    environment:
+      - ZONE=eu
+      - HAPROXY_CONFIG_PATH=/etc/haproxy/haproxy.cfg
+      - HAPROXY_SOCKET=/var/run/haproxy/haproxy.sock
+      - BLOCKCHAIN_RPC=http://blockchain:8545
+      - JWT_SECRET=your_jwt_secret_here
+      - LOG_LEVEL=info
+    depends_on:
+      - blockchain
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =================================================================
+  # US ZONE SERVICES - HAProxy Cluster with Keepalived VIP
+  # =================================================================
+
+  # US HAProxy Master with Keepalived
+  us-haproxy-1:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: us-haproxy-1
+    hostname: us-haproxy-1
+    privileged: true  # Required for Keepalived VIP management
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.10
+      management:
+    ports:
+      - "8086:80"         # HTTP
+      - "8446:443"        # HTTPS
+      - "8447:8443"       # gRPC
+      - "8406:8404"       # Stats
+    volumes:
+      - ../configs/haproxy/haproxy-us.cfg:/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy/maintenance.html:/etc/haproxy/maintenance.html:ro
+      - ssl_certificates:/etc/ssl/haproxy:ro
+      - us_haproxy_socket:/var/run/haproxy
+    environment:
+      - ZONE=us
+      - ROLE=master
+      - VIP_ADDRESS=10.2.0.100
+      - KEEPALIVED_PRIORITY=100
+      - PEER_ADDRESS=10.2.0.11
+      - VRRP_PASSWORD=us_vrrp_secure_pass
+    depends_on:
+      - us-backend-1
+      - us-backend-2
+      - us-backend-3
+      - ssl-cert-manager
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8404/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+
+  # US HAProxy Backup with Keepalived
+  us-haproxy-2:
+    build:
+      context: ./haproxy
+      dockerfile: Dockerfile
+    container_name: us-haproxy-2
+    hostname: us-haproxy-2
+    privileged: true  # Required for Keepalived VIP management
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.11
+      management:
+    ports:
+      - "8087:80"         # HTTP
+      - "8448:443"        # HTTPS
+      - "8449:8443"       # gRPC
+      - "8407:8404"       # Stats
+    volumes:
+      - ../configs/haproxy/haproxy-us.cfg:/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy/maintenance.html:/etc/haproxy/maintenance.html:ro
+      - ssl_certificates:/etc/ssl/haproxy:ro
+      - us_haproxy_socket:/var/run/haproxy
+    environment:
+      - ZONE=us
+      - ROLE=backup
+      - VIP_ADDRESS=10.2.0.100
+      - KEEPALIVED_PRIORITY=95
+      - PEER_ADDRESS=10.2.0.10
+      - VRRP_PASSWORD=us_vrrp_secure_pass
+    depends_on:
+      - us-backend-1
+      - us-backend-2
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8404/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    cap_add:
+      - NET_ADMIN
+      - NET_BROADCAST
+      - NET_RAW
+
+  # US Backend Nodes
+  us-backend-1:
+    image: nginx:alpine
+    container_name: us-backend-1
+    hostname: us-backend-1
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.20
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=us-node-1
+      - ZONE=us
+      - SERVER_NAME=us-backend-1
+    restart: unless-stopped
+
+  us-backend-2:
+    image: nginx:alpine
+    container_name: us-backend-2
+    hostname: us-backend-2
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.21
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=us-node-2
+      - ZONE=us
+      - SERVER_NAME=us-backend-2
+    restart: unless-stopped
+
+  us-backend-3:
+    image: nginx:alpine
+    container_name: us-backend-3
+    hostname: us-backend-3
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.22
+    volumes:
+      - ./backend/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./backend/health.html:/usr/share/nginx/html/health:ro
+      - ./backend/index.html:/usr/share/nginx/html/index.html:ro
+    environment:
+      - NODE_ID=us-node-3
+      - ZONE=us
+      - SERVER_NAME=us-backend-3
+    restart: unless-stopped
+
+  # US ConfigWatcher API - Primary
+  us-configwatcher:
+    image: python:3.11-alpine
+    container_name: us-configwatcher
+    hostname: us-configwatcher
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.30
+      management:
+    ports:
+      - "9081:8080"
+    volumes:
+      - ./configwatcher-api:/app
+      - ../configs/haproxy/haproxy-us.cfg:/etc/haproxy/haproxy.cfg
+      - us_haproxy_socket:/var/run/haproxy
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: sh -c "apk add --no-cache socat curl && mkdir -p /app/logs && pip install 'flask-restx>=1.3.0' flask redis requests pyyaml flask-cors prometheus-client pyjwt web3 docker && python src/app.py"
+    environment:
+      - ZONE=us
+      - HAPROXY_CONFIG_PATH=/etc/haproxy/haproxy.cfg
+      - HAPROXY_SOCKET=/var/run/haproxy/haproxy.sock
+      - BLOCKCHAIN_RPC=http://blockchain:8545
+      - JWT_SECRET=your_jwt_secret_here
+      - LOG_LEVEL=info
+    depends_on:
+      - blockchain
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # US ConfigWatcher API - Backup
+  us-configwatcher-2:
+    image: python:3.11-alpine
+    container_name: us-configwatcher-2
+    hostname: us-configwatcher-2
+    networks:
+      us_zone:
+        ipv4_address: 10.2.0.31
+      management:
+    ports:
+      - "9083:8080"
+    volumes:
+      - ./configwatcher-api:/app
+      - ../configs/haproxy/haproxy-us.cfg:/etc/haproxy/haproxy.cfg
+      - us_haproxy_socket:/var/run/haproxy
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
+    command: sh -c "apk add --no-cache socat curl && mkdir -p /app/logs && pip install 'flask-restx>=1.3.0' flask redis requests pyyaml flask-cors prometheus-client pyjwt web3 docker && python src/app.py"
+    environment:
+      - ZONE=us
+      - HAPROXY_CONFIG_PATH=/etc/haproxy/haproxy.cfg
+      - HAPROXY_SOCKET=/var/run/haproxy/haproxy.sock
+      - BLOCKCHAIN_RPC=http://blockchain:8545
+      - JWT_SECRET=your_jwt_secret_here
+      - LOG_LEVEL=info
+    depends_on:
+      - blockchain
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/api/v1/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =================================================================
+  # CERTIFICATE MANAGEMENT - Simple SSL Certificate Generation
+  # =================================================================
+  
+  ssl-cert-manager:
+    image: alpine:latest
+    container_name: ssl-cert-manager
+    hostname: ssl-cert-manager
+    networks:
+      management:
+    volumes:
+      - ssl_certificates:/certs
+      - ./ssl:/scripts:ro
+    command: |
+      sh -c "
+        apk add --no-cache openssl &&
+        mkdir -p /certs &&
+        
+        # Generate CA certificate
+        openssl genrsa -out /certs/ca-key.pem 4096 &&
+        openssl req -new -x509 -days 365 -key /certs/ca-key.pem -sha256 -out /certs/ca.pem -subj '/C=US/ST=CA/L=San Francisco/O=DDC/CN=DDC-CA' &&
+        
+        # Generate EU zone certificate
+        openssl genrsa -out /certs/eu-key.pem 4096 &&
+        openssl req -subj '/C=US/ST=CA/L=San Francisco/O=DDC/CN=eu.ddc.local' -new -key /certs/eu-key.pem -out /certs/eu.csr &&
+        echo 'subjectAltName = DNS:eu.ddc.local,DNS:*.eu.ddc.local,DNS:localhost,IP:10.1.0.100' > /certs/eu-extfile.cnf &&
+        openssl x509 -req -days 365 -in /certs/eu.csr -CA /certs/ca.pem -CAkey /certs/ca-key.pem -out /certs/eu.pem -extfile /certs/eu-extfile.cnf -CAcreateserial &&
+        cat /certs/eu.pem /certs/eu-key.pem > /certs/eu-combined.pem &&
+        
+        # Generate US zone certificate  
+        openssl genrsa -out /certs/us-key.pem 4096 &&
+        openssl req -subj '/C=US/ST=CA/L=San Francisco/O=DDC/CN=us.ddc.local' -new -key /certs/us-key.pem -out /certs/us.csr &&
+        echo 'subjectAltName = DNS:us.ddc.local,DNS:*.us.ddc.local,DNS:localhost,IP:10.2.0.100' > /certs/us-extfile.cnf &&
+        openssl x509 -req -days 365 -in /certs/us.csr -CA /certs/ca.pem -CAkey /certs/ca-key.pem -out /certs/us.pem -extfile /certs/us-extfile.cnf -CAcreateserial &&
+        cat /certs/us.pem /certs/us-key.pem > /certs/us-combined.pem &&
+        
+        # Generate wildcard certificate for testing
+        openssl genrsa -out /certs/wildcard-key.pem 4096 &&
+        openssl req -subj '/C=US/ST=CA/L=San Francisco/O=DDC/CN=*.ddc.local' -new -key /certs/wildcard-key.pem -out /certs/wildcard.csr &&
+        echo 'subjectAltName = DNS:*.ddc.local,DNS:ddc.local,DNS:localhost' > /certs/wildcard-extfile.cnf &&
+        openssl x509 -req -days 365 -in /certs/wildcard.csr -CA /certs/ca.pem -CAkey /certs/ca-key.pem -out /certs/wildcard.pem -extfile /certs/wildcard-extfile.cnf -CAcreateserial &&
+        cat /certs/wildcard.pem /certs/wildcard-key.pem > /certs/haproxy.pem &&
+        
+        # Set permissions
+        chmod 644 /certs/*.pem &&
+        chmod 600 /certs/*-key.pem &&
+        
+        echo 'SSL certificates generated successfully' &&
+        sleep infinity
+      "
+    restart: unless-stopped
+
+  # =================================================================
+  # DNS SETUP - Geo-routing DNS Server
+  # =================================================================
+  
+  geo-dns-server:
+    image: coredns/coredns:latest
+    container_name: geo-dns-server
+    hostname: geo-dns-server
+    networks:
+      management:
+        ipv4_address: 10.0.0.53
+    ports:
+      - "1053:53/udp"     # DNS (non-privileged port for local testing)
+      - "1053:53/tcp"     # DNS TCP
+    volumes:
+      - ./dns/Corefile:/etc/coredns/Corefile:ro
+      - ./dns/zones:/etc/coredns/zones:ro
+      - dns_data:/data
+    command: ["-conf", "/etc/coredns/Corefile"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nslookup", "ddc.local", "127.0.0.1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Legacy DNSMasq for additional testing
+  dnsmasq:
+    image: jpillora/dnsmasq
+    platform: linux/amd64
+    container_name: dnsmasq
+    hostname: dnsmasq
+    networks:
+      management:
+        ipv4_address: 10.0.0.54
+    ports:
+      - "2053:53/udp"     # Alternative DNS port
+      - "5380:8080"       # Web UI
+    volumes:
+      - ./dns/dnsmasq.conf:/etc/dnsmasq.conf:ro
+    environment:
+      - HTTP_USER=admin
+      - HTTP_PASS=admin
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+
+  # =================================================================
+  # SHARED SERVICES
+  # =================================================================
+
+  # Mock Blockchain for Testing
+  blockchain:
+    image: ethereum/client-go:latest
+    container_name: blockchain-mock
+    hostname: blockchain
+    networks:
+      management:
+        ipv4_address: 10.0.0.45
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+    command: |
+      --dev
+      --http
+      --http.addr 0.0.0.0
+      --http.port 8545
+      --http.api eth,net,web3,personal
+      --ws
+      --ws.addr 0.0.0.0
+      --ws.port 8546
+      --ws.api eth,net,web3,personal
+      --allow-insecure-unlock
+    restart: unless-stopped
+
+  # Redis for ConfigWatcher state
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    hostname: redis
+    networks:
+      management:
+        ipv4_address: 10.0.0.46
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis/redis.conf:/etc/redis/redis.conf:ro
+    command: redis-server /etc/redis/redis.conf
+    restart: unless-stopped
+
+  # Monitoring Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    hostname: prometheus
+    networks:
+      management:
+        ipv4_address: 10.0.0.47
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - monitoring_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    hostname: grafana
+    networks:
+      management:
+        ipv4_address: 10.0.0.48
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+
+  # Load Testing Service
+  locust:
+    image: locustio/locust:latest
+    container_name: locust
+    hostname: locust
+    networks:
+      management:
+        ipv4_address: 10.0.0.49
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./testing/locustfile.py:/mnt/locust/locustfile.py:ro
+    command: -f /mnt/locust/locustfile.py --host=http://eu-haproxy-1 --web-host=0.0.0.0
+    restart: unless-stopped
+
+  # =================================================================
+  # TESTING AND UTILITIES
+  # =================================================================
+
+  # Test Client Container
+  test-client:
+    image: curlimages/curl:latest
+    container_name: test-client
+    hostname: test-client
+    networks:
+      - eu_zone
+      - us_zone
+      - management
+    volumes:
+      - ../scripts/monitoring:/scripts:ro
+      - ../tests:/tests:ro
+    command: ["sleep", "3600"]
+    restart: unless-stopped
+
+  # Health Check Monitor
+  health-monitor:
+    image: alpine:latest
+    container_name: health-monitor
+    hostname: health-monitor
+    networks:
+      management:
+    volumes:
+      - ../scripts/monitoring:/scripts:ro
+    command: |
+      sh -c "
+        apk add --no-cache curl jq &&
+        while true; do
+          echo '=== Health Check Report ===' &&
+          echo 'EU Zone:' &&
+          curl -s http://eu-haproxy-1:8404/health || echo 'EU-1 DOWN' &&
+          curl -s http://eu-haproxy-2:8404/health || echo 'EU-2 DOWN' &&
+          echo 'US Zone:' &&
+          curl -s http://us-haproxy-1:8404/health || echo 'US-1 DOWN' &&
+          curl -s http://us-haproxy-2:8404/health || echo 'US-2 DOWN' &&
+          echo 'ConfigWatcher:' &&
+          curl -s http://eu-configwatcher:8080/api/v1/health || echo 'EU ConfigWatcher DOWN' &&
+          curl -s http://us-configwatcher:8080/api/v1/health || echo 'US ConfigWatcher DOWN' &&
+          echo '=========================' &&
+          sleep 60
+        done
+      "
+    restart: unless-stopped 
+ 

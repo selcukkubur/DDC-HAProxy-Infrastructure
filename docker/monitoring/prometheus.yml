@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'haproxy-eu'
+    static_configs:
+      - targets: ['eu-haproxy-1:8404', 'eu-haproxy-2:8405']
+
+  - job_name: 'haproxy-us'
+    static_configs:
+      - targets: ['us-haproxy-1:8406', 'us-haproxy-2:8407']
+
+  - job_name: 'configwatcher'
+    static_configs:
+      - targets: ['eu-configwatcher:8080', 'us-configwatcher:8080'] 
